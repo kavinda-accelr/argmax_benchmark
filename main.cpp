@@ -241,10 +241,7 @@ void argmax_mt_benchmark(
     
     for(unsigned int c=0; c<cycles; c++)
     {
-        for(auto& i : tensor)
-        {
-            i = rand()%256 - 128;
-        }
+        fill_vec(tensor);
 
         Timer::Get().start("Argmax MT-" + std::to_string(num_columns) + "x" + std::to_string(num_rows) + "x" + std::to_string(num_filters));
         total_work_count = 0;
@@ -266,12 +263,38 @@ void argmax_mt_benchmark(
     }
 }
 
+void argmax_st_benchmark(
+    const unsigned int num_rows,
+    const unsigned int num_columns,
+    const unsigned int num_filters,
+    const unsigned int cycles
+)
+{
+    const unsigned int size = num_rows * num_columns * num_filters;
+    const unsigned int mat_size = num_rows * num_columns;
+
+    std::vector<int8_t> tensor(size);
+    std::vector<int8_t> mat(mat_size);
+
+    srand((unsigned int)time(NULL));
+    for(unsigned int c=0; c<cycles; c++)
+    {
+        fill_vec(tensor);
+
+        Timer::Get().start("Argmax ST-" + std::to_string(num_columns) + "x" + std::to_string(num_rows) + "x" + std::to_string(num_filters));
+        argmax_tensor(tensor.data(), mat.data(), num_filters, mat_size);
+        Timer::Get().stop();
+    }
+}
+
+
 int main()
 {
     test_argmax_mt();
     argmax_mt_benchmark_tp(224, 224, 21, 1000);
     argmax_mt_benchmark_as(224, 224, 21, 1000);
     argmax_mt_benchmark(224, 224, 21, 1000);
+    argmax_st_benchmark(224, 224, 21, 1000);
 
     Timer::Get().print_duration();
 
