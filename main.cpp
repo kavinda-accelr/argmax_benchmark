@@ -6,6 +6,98 @@
 
 #define NUM_THREADS 4
 
+class ThreadPool_Wait
+{
+public:
+    ThreadPool_Wait(const unsigned int num_threads=0): m_task_count(0), m_join(false)
+    {
+        m_num_threads = (num_threads > 0) ? num_threads : std::thread::hardware_concurrency();
+        for(unsigned int i=0; i<m_num_threads; i++)
+        {
+            m_threads.emplace_back(std::thread(ThreadPool_Wait::thread_work, this));
+        }
+    }
+
+    void assign(std::function<void()> work)
+    {
+        m_queue_mutex.lock();
+        m_work_queue.push(work);
+        m_queue_mutex.unlock();
+        m_cv.notify_one();
+    }
+
+    void join()
+    {
+        m_join = true;
+        m_cv.notify_all();
+        for(auto& t : m_threads)
+        {
+            if(t.joinable()) t.join();
+        }
+    }
+
+    void wait_until(const unsigned int task_count)
+    {
+        // wait only if task count not completed and join not called
+        while (m_task_count < task_count && !m_join) std::this_thread::yield();
+        m_task_count = 0;
+    }
+
+    unsigned int get_num_threads() const
+    {
+        return m_num_threads;
+    }
+
+    ~ThreadPool_Wait()
+    {
+        join();
+    }
+private:
+    static void thread_work(ThreadPool_Wait *threadPool)
+    {
+        std::function<void()> work;
+        bool work_assigned = false;
+        std::unique_lock<std::mutex> cv_lck(threadPool->m_cv_mutex, std::defer_lock);
+        std::unique_lock<std::mutex> queue_lck(threadPool->m_queue_mutex, std::defer_lock);
+        //break the loop if only join is called and queue is empty 
+        while (!(threadPool->m_join && threadPool->m_work_queue.empty())) 
+        {
+            cv_lck.lock();
+            //call wait only if join is not called and queue is empty 
+            if(!threadPool->m_join && threadPool->m_work_queue.empty())
+            {
+                //wait only if join is not called and queue is empty
+                threadPool->m_cv.wait(cv_lck, [&threadPool]()
+                {return !(!threadPool->m_join && threadPool->m_work_queue.empty());}); 
+            }
+            cv_lck.unlock();
+ 
+            queue_lck.lock();
+            if(!threadPool->m_work_queue.empty())
+            {
+                work = threadPool->m_work_queue.front();
+                threadPool->m_work_queue.pop();
+                work_assigned = true;
+            }
+            queue_lck.unlock();
+            if(work_assigned) 
+            {
+                work();
+                threadPool->m_task_count++;
+                work_assigned = false;
+            }
+        }
+    }
+    std::vector<std::thread> m_threads;
+    std::mutex m_queue_mutex;
+    std::mutex m_cv_mutex;
+    std::condition_variable m_cv;
+    std::atomic_bool m_join;
+    unsigned int m_num_threads;
+    std::atomic_uint16_t m_task_count;
+    std::queue<std::function<void()>> m_work_queue;
+};
+
 template<typename T>
 inline unsigned int argmax(const T* const arr_ptr, unsigned const int size)
 {
@@ -63,6 +155,44 @@ void argmax_tensor_mt_thread_pool(
     }
     thread_pool.wait_until(num_threads);
 }
+
+template <typename T>
+void argmax_tensor_mt_thread_pool_wait(
+    const T* tensor_ptr, 
+    T* const mat_ptr, 
+    const unsigned int num_filters, 
+    const unsigned int mat_size, 
+    ThreadPool_Wait& thread_pool)
+{
+    const unsigned int num_threads = thread_pool.get_num_threads();
+    const unsigned int work_per_thread = mat_size/num_threads;
+    const unsigned int work_left = mat_size%num_threads;
+    unsigned int total_work_count = 0;
+    unsigned int work_count = 0;
+    for(unsigned int i=0; i<num_threads; i++)
+    {
+        work_count = (i < work_left ? work_per_thread + 1 : work_per_thread);
+        thread_pool.assign([&, total_work_count, work_count](){
+            const T* c_tensor_ptr = tensor_ptr + num_filters*total_work_count;
+            T* const c_mat_ptr = mat_ptr + total_work_count;
+            const T* max_val_ptr = NULL;
+            unsigned int i, j;
+            for(i=0; i<work_count; i++)
+            {
+                max_val_ptr = c_tensor_ptr;
+                for(j = 1; j<num_filters; j++)
+                {
+                    max_val_ptr = c_tensor_ptr[j] > *max_val_ptr ? (c_tensor_ptr + j) : max_val_ptr;
+                }
+                c_mat_ptr[i] = (unsigned int)(max_val_ptr - c_tensor_ptr);   
+                c_tensor_ptr += num_filters;
+            }
+        });
+        total_work_count += work_count;
+    }
+    thread_pool.wait_until(num_threads);
+}
+
 
 template <typename T>
 void argmax_tensor_mt_async(
@@ -146,19 +276,23 @@ void test_argmax_mt()
         const unsigned int mat_size = num_columns*num_rows;
 
         obj_detect::Thread_Pool thread_pool(num_theads);
+        ThreadPool_Wait thread_pool_wait(num_theads);
         std::vector<int8_t> tensor(tensor_size);
         std::vector<int8_t> mat_1(mat_size);
         std::vector<int8_t> mat_2(mat_size);
         std::vector<int8_t> mat_3(mat_size);
+        std::vector<int8_t> mat_4(mat_size);
 
         fill_vec(tensor);
 
         argmax_tensor(tensor.data(), mat_1.data(), num_filters, mat_size);
         argmax_tensor_mt_thread_pool(tensor.data(), mat_2.data(), num_filters, mat_size, thread_pool);
-        argmax_tensor_mt_async(tensor.data(), mat_3.data(), num_filters, mat_size, num_theads);
+        argmax_tensor_mt_thread_pool_wait(tensor.data(), mat_3.data(), num_filters, mat_size, thread_pool_wait);
+        argmax_tensor_mt_async(tensor.data(), mat_4.data(), num_filters, mat_size, num_theads);
 
         comp_vec(mat_1, mat_2);
         comp_vec(mat_1, mat_3);
+        comp_vec(mat_1, mat_4);
 
         std::cout<<"I : "<< i<<" | ";
         // std::cout<<"T : "<< num_theads<<" | ";
@@ -192,6 +326,32 @@ void argmax_mt_benchmark_tp(
         Timer::Get().stop();
     }
 }
+
+void argmax_mt_benchmark_tpw(
+    const unsigned int num_rows,
+    const unsigned int num_columns,
+    const unsigned int num_filters,
+    const unsigned int cycles)
+{
+    const unsigned int size = num_rows * num_columns * num_filters;
+    const unsigned int mat_size = num_rows * num_columns;
+
+    std::vector<int8_t> tensor(size);
+    std::vector<int8_t> mat(mat_size);
+
+    srand((unsigned int)time(NULL));
+    const unsigned int num_theads = NUM_THREADS;
+    ThreadPool_Wait thread_pool(num_theads);
+    
+    for(unsigned int c=0; c<cycles; c++)
+    {
+        fill_vec(tensor);
+        Timer::Get().start("Argmax MT-TPW-" + std::to_string(num_columns) + "x" + std::to_string(num_rows) + "x" + std::to_string(num_filters));
+        argmax_tensor_mt_thread_pool_wait(tensor.data(), mat.data(), num_filters, mat_size, thread_pool);
+        Timer::Get().stop();
+    }
+}
+
 
 void argmax_mt_benchmark_as(
     const unsigned int num_rows,
@@ -292,6 +452,7 @@ int main()
 {
     test_argmax_mt();
     argmax_mt_benchmark_tp(224, 224, 21, 1000);
+    argmax_mt_benchmark_tpw(224, 224, 21, 1000);
     argmax_mt_benchmark_as(224, 224, 21, 1000);
     argmax_mt_benchmark(224, 224, 21, 1000);
     argmax_st_benchmark(224, 224, 21, 1000);
