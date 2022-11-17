@@ -1,0 +1,7 @@
+/.vscode
+/build
+/boost
+*.exe
+*.ilk
+*.pdb
+*.obj
