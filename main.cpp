@@ -300,8 +300,10 @@ void test_argmax_mt()
         // std::cout<<"R : "<< num_rows<<" | ";
         // std::cout<<"F : "<< num_filters<<std::endl;
     }
+    std::cout<<std::endl;
 }
 
+// Argmax MT-TP
 void argmax_mt_benchmark_tp(
     const unsigned int num_rows,
     const unsigned int num_columns,
@@ -327,6 +329,7 @@ void argmax_mt_benchmark_tp(
     }
 }
 
+// Argmax MT-TPW
 void argmax_mt_benchmark_tpw(
     const unsigned int num_rows,
     const unsigned int num_columns,
@@ -352,7 +355,7 @@ void argmax_mt_benchmark_tpw(
     }
 }
 
-
+//Argmax MT-AS
 void argmax_mt_benchmark_as(
     const unsigned int num_rows,
     const unsigned int num_columns,
@@ -378,6 +381,7 @@ void argmax_mt_benchmark_as(
     }
 }
 
+// Argmax MT
 void argmax_mt_benchmark(
     const unsigned int num_rows,
     const unsigned int num_columns,
@@ -423,6 +427,7 @@ void argmax_mt_benchmark(
     }
 }
 
+// Argmax ST
 void argmax_st_benchmark(
     const unsigned int num_rows,
     const unsigned int num_columns,
@@ -447,15 +452,33 @@ void argmax_st_benchmark(
     }
 }
 
+void sim()
+{
+    const unsigned int cycles = 10;
+    const unsigned int rows = 224;
+    const unsigned int columns = 224;
+    const unsigned int filters = 224;
+
+    test_argmax_mt();
+    argmax_mt_benchmark_tp(rows, columns, filters, cycles);
+    argmax_mt_benchmark_tpw(rows, columns, filters, cycles);
+    argmax_mt_benchmark_as(rows, columns, filters, cycles);
+    argmax_mt_benchmark(rows, columns, filters, cycles);
+    argmax_st_benchmark(rows, columns, filters, cycles);
+
+    Timer::Get().print_duration();
+}
 
 int main()
 {
-    test_argmax_mt();
-    argmax_mt_benchmark_tp(224, 224, 21, 1000);
-    argmax_mt_benchmark_tpw(224, 224, 21, 1000);
-    argmax_mt_benchmark_as(224, 224, 21, 1000);
-    argmax_mt_benchmark(224, 224, 21, 1000);
-    argmax_st_benchmark(224, 224, 21, 1000);
+    const unsigned int cycles = 100;
+    const unsigned int rows = 5000;
+    const unsigned int columns = 5000;
+    const unsigned int filters = 21;
+
+    argmax_st_benchmark(rows, columns, filters, cycles);
+    argmax_mt_benchmark_tp(rows, columns, filters, cycles);
+    argmax_mt_benchmark_tpw(rows, columns, filters, cycles);
 
     Timer::Get().print_duration();
 
